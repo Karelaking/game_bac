@@ -1,0 +1,17 @@
+{
+  "name": "phaser-tiled-game",
+  "version": "1.0.0",
+  "description": "Phaser 3 Tiled Map Game",
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "phaser": "^3.70.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
