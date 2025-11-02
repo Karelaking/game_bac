@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="40" height="40" tilewidth="16" tileheight="16" infinite="0" nextlayerid="17" nextobjectid="64">
- <tileset firstgid="1" name="tilemap_packed" tilewidth="16" tileheight="16" tilecount="486" columns="27">
-  <image source="D:/downloads/kenney_rpg-urban-pack (1)/Tilemap/tilemap_packed.png" width="432" height="288"/>
- </tileset>
+<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="40" height="40" tilewidth="16" tileheight="16" infinite="0" nextlayerid="17" nextobjectid="69">
+ <editorsettings>
+  <export target="llasttry.tmx" format="tmx"/>
+ </editorsettings>
+ <tileset firstgid="1" source="tilemap_packed.tsx"/>
  <layer id="10" name="ROADS" width="40" height="40">
   <data encoding="csv">
 0,0,0,0,0,0,0,0,0,0,0,0,0,462,463,464,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -284,12 +285,12 @@
   <properties>
    <property name="triggering" type="bool" value="true"/>
   </properties>
-  <object id="57" x="336" y="575.333" width="135.333" height="30"/>
   <object id="58" x="338" y="509.667" width="37.3333" height="68.3333"/>
   <object id="59" x="101.5" y="557.5" width="121.5" height="28"/>
   <object id="60" x="194.5" y="527.5" width="40" height="57"/>
   <object id="61" x="542.5" y="506.5" width="62" height="48.5"/>
   <object id="62" x="444" y="249" width="58.5" height="53"/>
   <object id="63" x="145" y="157.5" width="49" height="40"/>
+  <object id="67" x="336" y="571.333" width="28.6667" height="22"/>
  </objectgroup>
 </map>

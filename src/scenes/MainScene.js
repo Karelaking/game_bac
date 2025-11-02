@@ -16,6 +16,19 @@ export class MainScene extends Phaser.Scene {
         this.roadTiles = [469, 434, 461, 407, 462, 463, 464, 435, 436, 437, 470];
         // Bicycle tile ID for spawn point
         this.bicycleTileId = 470;
+        
+        // Gate button properties
+        this.gateButton = null; // Play gate button background
+        this.gateButtonText = null; // Play gate button text
+        this.triggerZones = []; // Array of trigger zone objects from the map
+        this.triggerProximity = 100; // Distance in pixels to show button
+        this.lastTriggerCheck = {}; // Track trigger zone entry/exit
+        this.lastTriggerWarning = null; // Track warning spam
+        this.lastPositionLog = null; // Track position logging spam
+        this.lastDistanceLog = null; // Track distance logging spam
+        this.closestZoneDistance = null; // Track closest zone distance
+        this.lastZoneCheck = null; // Track zone check logging
+        this.currentTriggerZone = null; // Currently active trigger zone
     }
 
     preload() {
@@ -230,6 +243,12 @@ export class MainScene extends Phaser.Scene {
             // Create animations
             this.createAnimations();
             
+            // Extract trigger zones from the map
+            this.extractTriggerZones();
+            
+            // Create gate button (it will be hidden until player enters trigger zone)
+            this.createGateButton();
+            
             // Mark as fully initialized
             this.isInitialized = true;
             console.log('Game fully initialized and ready');
@@ -303,6 +322,388 @@ export class MainScene extends Phaser.Scene {
         } catch (error) {
             console.error('Error creating animations:', error);
         }
+    }
+    
+    extractTriggerZones() {
+        try {
+            console.log('Extracting trigger zones from map...');
+            
+            // Access the raw map JSON data from the cache
+            // Phaser stores the raw map data in cache.tilemap
+            if (!this.cache.tilemap.exists('map')) {
+                console.error('Map not found in cache!');
+                return;
+            }
+            
+            const rawMapData = this.cache.tilemap.get('map');
+            console.log('Raw map data:', rawMapData);
+            
+            let triggerLayer = null;
+            
+            // Access the data property which contains the raw JSON
+            const mapData = rawMapData.data || rawMapData;
+            
+            console.log('Map data structure:', {
+                hasLayers: !!mapData.layers,
+                layerCount: mapData.layers ? mapData.layers.length : 0
+            });
+            
+            if (mapData && mapData.layers) {
+                // Find the object layer with triggering property
+                for (const layer of mapData.layers) {
+                    console.log('Checking layer:', {
+                        name: layer.name,
+                        type: layer.type,
+                        hasObjects: !!layer.objects,
+                        hasProperties: !!layer.properties,
+                        objectCount: layer.objects ? layer.objects.length : 0
+                    });
+                    
+                    if (layer.type === 'objectgroup') {
+                        // Check if this layer has the triggering property
+                        if (layer.properties) {
+                            console.log('Layer properties:', layer.properties);
+                            const hasTriggering = layer.properties.some(prop => {
+                                const match = prop.name === 'triggering' && prop.value === true;
+                                console.log('Property check:', prop.name, prop.value, 'matches:', match);
+                                return match;
+                            });
+                            
+                            if (hasTriggering && layer.objects) {
+                                triggerLayer = layer;
+                                console.log('FOUND TRIGGER LAYER!', layer);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (!triggerLayer || !triggerLayer.objects) {
+                console.warn('No triggering layer found in map');
+                if (mapData && mapData.layers) {
+                    console.log('Available layers:', mapData.layers.map(l => ({
+                        name: l.name,
+                        type: l.type || 'unknown',
+                        hasObjects: !!(l.objects && Array.isArray(l.objects)),
+                        hasProperties: !!(l.properties && l.properties.length > 0),
+                        properties: l.properties ? l.properties.map(p => `${p.name}=${p.value}`) : []
+                    })));
+                }
+                return;
+            }
+            
+            console.log(`Found trigger layer: ${triggerLayer.name || 'unnamed'} with ${triggerLayer.objects.length} objects`);
+            
+            // Extract all objects from the triggering layer
+            this.triggerZones = triggerLayer.objects.map((obj, index) => {
+                // Note: Tiled object coordinates are in pixels, relative to the map
+                const zone = {
+                    x: obj.x + (obj.width / 2), // Center x
+                    y: obj.y + (obj.height / 2), // Center y
+                    width: obj.width,
+                    height: obj.height,
+                    bounds: {
+                        left: obj.x,
+                        right: obj.x + obj.width,
+                        top: obj.y,
+                        bottom: obj.y + obj.height
+                    },
+                    raw: obj // Keep raw object data for debugging
+                };
+                console.log(`Trigger zone ${index}:`, {
+                    name: obj.name || 'unnamed',
+                    x: zone.x.toFixed(1),
+                    y: zone.y.toFixed(1),
+                    width: zone.width.toFixed(1),
+                    height: zone.height.toFixed(1),
+                    bounds: zone.bounds,
+                    rawObj: obj
+                });
+                return zone;
+            });
+            
+            console.log(`✓ Total trigger zones extracted: ${this.triggerZones.length}`);
+            console.log('All trigger zones:', this.triggerZones);
+            
+            // Increase proximity threshold if zones are very small
+            if (this.triggerZones.length > 0) {
+                const avgZoneSize = this.triggerZones.reduce((sum, z) => sum + (z.width + z.height) / 2, 0) / this.triggerZones.length;
+                if (avgZoneSize < this.triggerProximity) {
+                    console.log(`Average zone size (${avgZoneSize.toFixed(1)}) is smaller than proximity threshold (${this.triggerProximity}). Using zone size as threshold.`);
+                    this.triggerProximity = Math.max(avgZoneSize * 1.5, 50); // Use 1.5x average zone size or 50px minimum
+                }
+                console.log('Final proximity threshold:', this.triggerProximity);
+            }
+        } catch (error) {
+            console.error('Error extracting trigger zones:', error);
+            console.error('Stack trace:', error.stack);
+        }
+    }
+    
+    createGateButton() {
+        try {
+            // Create a message box style button
+            // Position will be set relative to trigger zone when shown
+            const buttonWidth = 90; // Reduced by 50%
+            const buttonHeight = 25; // Reduced by 50%
+            
+            // Create message box background with rounded corners effect
+            this.gateButton = this.add.rectangle(
+                0, // Position will be set when shown
+                0,
+                buttonWidth,
+                buttonHeight,
+                0x2d2d2d, // Dark background
+                0.95 // Slightly transparent
+            );
+            
+            // Create border for message box effect
+            this.gateButtonBorder = this.add.graphics();
+            this.gateButtonBorder.lineStyle(2, 0xffffff, 1); // Reduced border width from 3 to 2
+            this.gateButtonBorder.strokeRoundedRect(-buttonWidth/2, -buttonHeight/2, buttonWidth, buttonHeight, 5); // Reduced corner radius from 10 to 5
+            
+            // Create button text
+            this.gateButtonText = this.add.text(
+                0,
+                0,
+                'wanna play a quiz',
+                {
+                    fontSize: '10px', // Reduced from 16px to 8px, but using 10px for readability
+                    fontFamily: 'Arial, sans-serif',
+                    color: '#ffffff',
+                    fontWeight: 'bold',
+                    align: 'center',
+                    wordWrap: { width: buttonWidth - 10 } // Adjusted for smaller button
+                }
+            );
+            
+            // Set button properties
+            this.gateButton.setDepth(1000);
+            this.gateButton.setScrollFactor(1); // Scroll with camera to follow trigger zone
+            this.gateButton.setVisible(false); // Initially hidden
+            this.gateButton.setInteractive({ useHandCursor: true });
+            
+            // Set border properties
+            this.gateButtonBorder.setDepth(1001);
+            this.gateButtonBorder.setScrollFactor(1); // Scroll with camera
+            this.gateButtonBorder.setVisible(false);
+            
+            // Set text properties
+            this.gateButtonText.setDepth(1002);
+            this.gateButtonText.setScrollFactor(1); // Scroll with camera
+            this.gateButtonText.setOrigin(0.5, 0.5);
+            this.gateButtonText.setVisible(false);
+            this.gateButtonText.setInteractive({ useHandCursor: true });
+            
+            // Group button components for easier manipulation
+            this.gateButtonComponents = [this.gateButton, this.gateButtonBorder, this.gateButtonText];
+            
+            // Add hover effects
+            this.gateButton.on('pointerover', () => {
+                this.gateButton.setFillStyle(0x3d3d3d, 1.0);
+                this.gateButton.setScale(1.05);
+                this.gateButtonText.setScale(1.05);
+                this.gateButtonBorder.setScale(1.05);
+            });
+            
+            this.gateButton.on('pointerout', () => {
+                this.gateButton.setFillStyle(0x2d2d2d, 0.95);
+                this.gateButton.setScale(1.0);
+                this.gateButtonText.setScale(1.0);
+                this.gateButtonBorder.setScale(1.0);
+            });
+            
+            // Add click handler - THIS IS WHERE YOU CAN PROGRAM THE BUTTON ACTION
+            this.gateButton.on('pointerdown', () => {
+                console.log('Gate button clicked!');
+                this.onGateButtonClick();
+            });
+            
+            this.gateButtonText.on('pointerdown', () => {
+                console.log('Gate button text clicked!');
+                this.onGateButtonClick();
+            });
+            
+            console.log('✓ Gate button (message box) created');
+        } catch (error) {
+            console.error('Error creating gate button:', error);
+            console.error('Stack:', error.stack);
+        }
+    }
+    
+    // Programmable button action - customize this function
+    onGateButtonClick() {
+        console.log('Gate button action triggered!');
+        console.log('Current trigger zone:', this.currentTriggerZone);
+        
+        // ============================================
+        // CUSTOMIZE THIS FUNCTION WITH YOUR ACTION
+        // ============================================
+        
+        // Example: Play video
+        // this.playVideo();
+        
+        // Example: Open a menu
+        // this.openMenu();
+        
+        // Example: Trigger a cutscene
+        // this.startCutscene();
+        
+        // Example: Load a new scene
+        // this.scene.start('NextScene');
+        
+        // Example: Show a message
+        // this.showMessage('Gate activated!');
+        
+        // Example: Teleport player
+        // this.teleportPlayer({ x: 100, y: 100 });
+        
+        // For now, just log the action
+        alert('Gate button clicked! Customize onGateButtonClick() function with your action.');
+    }
+    
+    showGateButton() {
+        if (!this.gateButton) {
+            this.createGateButton();
+        }
+        
+        if (!this.currentTriggerZone || !this.currentTriggerZone.zone) {
+            console.warn('No current trigger zone to position button');
+            return;
+        }
+        
+        if (this.gateButton && this.gateButtonText && this.gateButtonBorder) {
+            // Position button near the trigger zone, above it
+            const zone = this.currentTriggerZone.zone;
+            
+            // Calculate button position in world coordinates
+            // Position above the trigger zone center
+            const buttonWorldX = zone.x;
+            const buttonWorldY = zone.bounds.top - 40; // 40 pixels above the zone
+            
+            // Position all button components in world space
+            this.gateButton.setPosition(buttonWorldX, buttonWorldY);
+            this.gateButton.setVisible(true);
+            this.gateButton.setDepth(1000);
+            
+            this.gateButtonBorder.setPosition(buttonWorldX, buttonWorldY);
+            this.gateButtonBorder.setVisible(true);
+            this.gateButtonBorder.setDepth(1001);
+            
+            this.gateButtonText.setPosition(buttonWorldX, buttonWorldY);
+            this.gateButtonText.setVisible(true);
+            this.gateButtonText.setDepth(1002);
+            
+            console.log('Gate button shown at world position:', buttonWorldX, buttonWorldY, 'near trigger zone:', this.currentTriggerZone.zone);
+        }
+    }
+    
+    hideGateButton() {
+        if (this.gateButton) {
+            this.gateButton.setVisible(false);
+        }
+        if (this.gateButtonBorder) {
+            this.gateButtonBorder.setVisible(false);
+        }
+        if (this.gateButtonText) {
+            this.gateButtonText.setVisible(false);
+        }
+    }
+    
+    checkProximityToTriggers() {
+        if (!this.player) {
+            return null; // Return null instead of false to track which zone
+        }
+        
+        if (this.triggerZones.length === 0) {
+            // Only log once every few seconds to avoid spam
+            if (!this.lastTriggerWarning || Date.now() - this.lastTriggerWarning > 5000) {
+                console.warn('No trigger zones available for proximity check');
+                console.log('Trigger zones array:', this.triggerZones);
+                this.lastTriggerWarning = Date.now();
+            }
+            return null;
+        }
+        
+        // Get player world coordinates
+        const playerX = this.player.x;
+        const playerY = this.player.y;
+        
+        // Debug: Log player position periodically (only every 2 seconds to avoid spam)
+        if (!this.lastPositionLog || Date.now() - this.lastPositionLog > 2000) {
+            console.log('Player position:', { x: playerX, y: playerY });
+            console.log('Total trigger zones:', this.triggerZones.length);
+            this.lastPositionLog = Date.now();
+        }
+        
+        // Check if player is within proximity of any trigger zone
+        for (let i = 0; i < this.triggerZones.length; i++) {
+            const zone = this.triggerZones[i];
+            
+            // Calculate distance from player to center of trigger zone
+            const dx = playerX - zone.x;
+            const dy = playerY - zone.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Check if player is within the trigger zone bounds
+            const inBounds = 
+                playerX >= zone.bounds.left &&
+                playerX <= zone.bounds.right &&
+                playerY >= zone.bounds.top &&
+                playerY <= zone.bounds.bottom;
+            
+            // Check if player is within proximity distance (expanded check)
+            const inProximity = distance <= this.triggerProximity;
+            
+            // Debug: Log distance for closest zone
+            if (i === 0 || distance < this.closestZoneDistance || !this.closestZoneDistance) {
+                this.closestZoneDistance = distance;
+                if (!this.lastDistanceLog || Date.now() - this.lastDistanceLog > 1000) {
+                    console.log(`Closest trigger zone ${i}:`, {
+                        playerPos: { x: playerX.toFixed(1), y: playerY.toFixed(1) },
+                        zoneCenter: { x: zone.x.toFixed(1), y: zone.y.toFixed(1) },
+                        zoneBounds: zone.bounds,
+                        distance: distance.toFixed(1),
+                        threshold: this.triggerProximity,
+                        inBounds,
+                        inProximity
+                    });
+                    this.lastDistanceLog = Date.now();
+                }
+            }
+            
+            if (inBounds || inProximity) {
+                // Log only once when entering
+                if (!this.lastTriggerCheck || !this.lastTriggerCheck[i] || this.lastTriggerCheck[i] === false) {
+                    console.log(`✓ PLAYER ENTERED TRIGGER ZONE ${i}!`, {
+                        playerPos: { x: playerX.toFixed(2), y: playerY.toFixed(2) },
+                        zoneCenter: { x: zone.x.toFixed(2), y: zone.y.toFixed(2) },
+                        zoneBounds: zone.bounds,
+                        distance: distance.toFixed(2),
+                        inBounds,
+                        inProximity,
+                        proximityThreshold: this.triggerProximity
+                    });
+                    if (!this.lastTriggerCheck) {
+                        this.lastTriggerCheck = {};
+                    }
+                    this.lastTriggerCheck[i] = true;
+                }
+                // Store current trigger zone
+                this.currentTriggerZone = { index: i, zone: zone };
+                return zone; // Return the zone object
+            } else {
+                if (this.lastTriggerCheck && this.lastTriggerCheck[i]) {
+                    console.log(`Player left trigger zone ${i}`);
+                    this.lastTriggerCheck[i] = false;
+                }
+            }
+        }
+        
+        // Player not in any zone
+        this.currentTriggerZone = null;
+        return null;
     }
     
     update() {
@@ -388,6 +789,36 @@ export class MainScene extends Phaser.Scene {
                     this.player.anims.play('idle', true);
                 }
             }
+            
+            // Check proximity to trigger zones and show/hide gate button
+            if (this.triggerZones.length > 0) {
+                const currentZone = this.checkProximityToTriggers();
+                
+                if (currentZone) {
+                    // Player is in trigger zone, show gate button
+                    // Update button position if zone changed or button not visible
+                    if (!this.gateButton || !this.gateButton.visible) {
+                        console.log('Player in trigger zone - showing gate button');
+                        this.showGateButton();
+                    } else {
+                        // Update button position to follow trigger zone (if needed)
+                        this.showGateButton();
+                    }
+                } else {
+                    // Player left trigger zone, hide gate button
+                    if (this.gateButton && this.gateButton.visible) {
+                        console.log('Player left trigger zone - hiding gate button');
+                        this.hideGateButton();
+                    }
+                }
+            } else {
+                // Debug: Log if no trigger zones available
+                if (!this.lastZoneCheck || Date.now() - this.lastZoneCheck > 5000) {
+                    console.warn('No trigger zones available in update loop. Zones count:', this.triggerZones.length);
+                    this.lastZoneCheck = Date.now();
+                }
+            }
+            
         } catch (error) {
             console.error('Error in update:', error);
         }
